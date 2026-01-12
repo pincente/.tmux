@@ -1,0 +1,12 @@
+name: code-review
+description: Chain multiple agents for comprehensive code review
+steps:
+  - agent: aider
+    name: initial-analysis
+    input: "${INPUT_DIR}"
+  - agent: gpt-cli
+    name: suggestions
+    input: "${aider:output}"
+  - agent: anthropic-cli
+    name: final-summary
+    input: "${gpt-cli:output}"

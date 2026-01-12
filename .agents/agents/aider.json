@@ -1,0 +1,11 @@
+{
+  "name": "aider",
+  "display_name": "Aider",
+  "command": "aider",
+  "default_args": ["--model", "gpt-4"],
+  "working_dir": null,
+  "env_vars": {},
+  "session_prefix": "agent-",
+  "icon": "🤖",
+  "color": "green"
+}

@@ -173,6 +173,7 @@ Features
   - Support for 4-digit hexadecimal Unicode characters
   - [PathPicker][] integration, if available
   - [Urlscan][] (preferred) or [Urlview][] integration, if available
+  - CLI Agent Management system for managing multiple CLI tools (see [AGENTS.md](AGENTS.md))
 
 [maximize-pane]: http://pempek.net/articles/2013/04/14/maximizing-tmux-pane-new-window/
 [PathPicker]: https://facebook.github.io/PathPicker/

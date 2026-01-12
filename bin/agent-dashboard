@@ -1,0 +1,206 @@
+#!/bin/bash
+# Agent Dashboard Management
+# Create and manage multi-agent dashboards
+
+set -e
+
+# Get the base directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMUX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source libraries
+source "${TMUX_DIR}/lib/agent-utils.sh"
+source "${TMUX_DIR}/lib/tmux-helpers.sh"
+
+# Show usage
+show_usage() {
+  cat << EOF
+Agent Dashboard Management
+
+Usage: agent-dashboard <command> [options]
+
+Commands:
+  create <name> --agents <agent1,agent2,...> [--layout <layout>]  Create a new dashboard
+  list                                                          List all dashboards
+  load <name>                                                   Load an existing dashboard
+  save <name>                                                   Save current session as dashboard
+
+Options:
+  --agents <agent1,agent2,...>   Comma-separated list of agents
+  --layout <layout>              Dashboard layout (tiled, main-horizontal, main-vertical, even-horizontal, even-vertical)
+  -h, --help                     Show this help message
+
+Examples:
+  agent-dashboard create "my-dashboard" --agents aider,gpt-cli
+  agent-dashboard create "review-dashboard" --layout tiled --agents aider,gpt-cli,anthropic-cli
+  agent-dashboard list
+  agent-dashboard load "my-dashboard"
+
+Available layouts:
+  tiled              - Equal-sized panes in a grid
+  main-horizontal    - One large pane, others stacked below
+  main-vertical      - One large pane, others stacked to the right
+  even-horizontal    - Panes spread evenly horizontally
+  even-vertical      - Panes spread evenly vertically
+
+EOF
+}
+
+# Create a new dashboard
+create_dashboard() {
+  local dashboard_name=$1
+  shift
+
+  local agents=()
+  local layout="tiled"
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --agents)
+        shift
+        IFS=',' read -ra agents <<< "$1"
+        ;;
+      --layout)
+        shift
+        layout=$1
+        ;;
+      *)
+        echo "Unknown option: $1" >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
+  if [[ ${#agents[@]} -eq 0 ]]; then
+    echo "Error: No agents specified. Use --agents to specify at least one agent." >&2
+    exit 1
+  fi
+
+  echo "Creating dashboard: $dashboard_name"
+  echo "Agents: ${agents[*]}"
+  echo "Layout: $layout"
+  echo ""
+
+  # Validate all agents
+  for agent in "${agents[@]}"; do
+    if ! validate_agent "$agent"; then
+      exit 1
+    fi
+  done
+
+  # Create dashboard
+  if tmux_create_dashboard "$dashboard_name" "$layout" "${agents[@]}"; then
+    echo ""
+    echo "✓ Dashboard created successfully"
+    echo "  Use 'agent-dashboard load $dashboard_name' to switch to it"
+  else
+    echo "✗ Failed to create dashboard" >&2
+    exit 1
+  fi
+}
+
+# List all dashboards
+list_dashboards() {
+  local dashboards
+  dashboards=$(tmux_list_dashboard_sessions 2>/dev/null)
+
+  if [[ -z "$dashboards" ]]; then
+    echo "No dashboards running"
+    return 0
+  fi
+
+  printf "%-30s %-15s\n" "Dashboard" "Agents"
+  printf "%-30s %-15s\n" "---------" "------"
+
+  while IFS='|' read -r session_name agent_count; do
+    printf "%-30s %-15s\n" "$session_name" "$agent_count"
+  done <<< "$dashboards"
+}
+
+# Load an existing dashboard
+load_dashboard() {
+  local dashboard_name=$1
+  local session_name="dashboard-${dashboard_name}"
+
+  if ! tmux has-session -t "$session_name" 2>/dev/null; then
+    echo "Dashboard not found: $session_name" >&2
+    echo "Use 'agent-dashboard create $dashboard_name' to create it" >&2
+    return 1
+  fi
+
+  if tmux_switch_session "$session_name"; then
+    echo "✓ Switched to dashboard: $session_name"
+  else
+    echo "✗ Failed to switch to dashboard" >&2
+    exit 1
+  fi
+}
+
+# Save current session as dashboard
+save_dashboard() {
+  local dashboard_name=$1
+
+  echo "Saving current session as dashboard: $dashboard_name"
+
+  local current_session
+  current_session=$(tmux display-message -p '#S')
+
+  # Rename current session
+  tmux rename-session -t "$current_session" "dashboard-${dashboard_name}"
+
+  echo "✓ Saved as dashboard: dashboard-${dashboard_name}"
+}
+
+# Main
+main() {
+  if [[ $# -eq 0 ]]; then
+    show_usage
+    exit 0
+  fi
+
+  local command=$1
+  shift
+
+  case $command in
+    create)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing dashboard name" >&2
+        echo "Usage: agent-dashboard create <name> --agents <agent1,agent2,...>" >&2
+        exit 1
+      fi
+      create_dashboard "$@"
+      ;;
+    list)
+      list_dashboards
+      ;;
+    load)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing dashboard name" >&2
+        echo "Usage: agent-dashboard load <name>" >&2
+        exit 1
+      fi
+      load_dashboard "$1"
+      ;;
+    save)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing dashboard name" >&2
+        echo "Usage: agent-dashboard save <name>" >&2
+        exit 1
+      fi
+      save_dashboard "$1"
+      ;;
+    -h|--help|help)
+      show_usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown command: $command" >&2
+      echo "Use 'agent-dashboard --help' for usage information" >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

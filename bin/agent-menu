@@ -1,0 +1,168 @@
+#!/bin/bash
+# Interactive Agent Menu
+# Fzf/peco-based menu for selecting and managing agents
+
+set -e
+
+# Get the base directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMUX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source libraries
+source "${TMUX_DIR}/lib/agent-utils.sh"
+source "${TMUX_DIR}/lib/tmux-helpers.sh"
+
+# Check for fzf or peco
+find_fuzzy_finder() {
+  if command -v fzf &> /dev/null; then
+    echo "fzf"
+  elif command -v peco &> /dev/null; then
+    echo "peco"
+  else
+    echo ""
+  fi
+}
+
+# Show menu
+show_menu() {
+  local fuzzy_finder
+  fuzzy_finder=$(find_fuzzy_finder)
+
+  if [[ -z "$fuzzy_finder" ]]; then
+    echo "No fuzzy finder found. Please install fzf or peco."
+    echo ""
+    echo "To install fzf:"
+    echo "  git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf"
+    echo "  ~/.fzf/install"
+    exit 1
+  fi
+
+  # Build agent list
+  local agent_list=""
+  local available_agents
+  available_agents=$(list_available_agents)
+
+  for agent in $available_agents; do
+    local icon
+    icon=$(get_agent_icon "$agent")
+    local display_name
+    display_name=$(get_agent_display_name "$agent")
+    local status
+
+    if is_agent_session_running "$agent"; then
+      status="[running]"
+    else
+      status="[stopped]"
+    fi
+
+    agent_list+="${icon} ${display_name} ${status}\n"
+  done
+
+  # Add options
+  agent_list+="\n"
+  agent_list+="--- List All Agents ---\n"
+  agent_list+="--- Create Dashboard ---\n"
+  agent_list+="--- List Dashboards ---"
+
+  # Show menu
+  local selection
+  selection=$(echo -e "$agent_list" | $fuzzy_finder --ansi --prompt="Agent > ")
+
+  if [[ -z "$selection" ]]; then
+    return 0
+  fi
+
+  # Parse selection
+  if [[ $selection == *"--- List All Agents ---"* ]]; then
+    agent-session list
+  elif [[ $selection == *"--- Create Dashboard ---"* ]]; then
+    echo "Create dashboard:"
+    read -p "Dashboard name: " dashboard_name
+    read -p "Agents (comma-separated): " agents_input
+
+    if [[ -n "$dashboard_name" && -n "$agents_input" ]]; then
+      agent-dashboard create "$dashboard_name" --agents "$agents_input"
+    fi
+  elif [[ $selection == *"--- List Dashboards ---"* ]]; then
+    agent-dashboard list
+  else
+    # Extract agent name from selection
+    local agent_name
+    agent_name=$(echo "$selection" | awk '{print $NF}' | sed 's/\[.*\]//')
+
+    if [[ -n "$agent_name" ]]; then
+      # Show agent actions
+      show_agent_actions "$agent_name"
+    fi
+  fi
+}
+
+# Show agent-specific actions
+show_agent_actions() {
+  local agent_name=$1
+  local fuzzy_finder
+  fuzzy_finder=$(find_fuzzy_finder)
+
+  local is_running
+  is_running=false
+  if is_agent_session_running "$agent_name"; then
+    is_running=true
+  fi
+
+  local actions=""
+  actions+="Start Agent\n"
+
+  if [[ $is_running == true ]]; then
+    actions+="Switch to Agent\n"
+    actions+="Stop Agent\n"
+    actions+="View Status\n"
+  fi
+
+  local selection
+  selection=$(echo -e "$actions" | $fuzzy_finder --ansi --prompt="Action for $agent_name > ")
+
+  case $selection in
+    "Start Agent")
+      agent-session start "$agent_name"
+      ;;
+    "Switch to Agent")
+      agent-session switch "$agent_name"
+      ;;
+    "Stop Agent")
+      agent-session stop "$agent_name"
+      ;;
+    "View Status")
+      agent-session status "$agent_name"
+      ;;
+  esac
+}
+
+# Show usage
+show_usage() {
+  cat << EOF
+Interactive Agent Menu
+
+Usage: agent-menu
+
+Launch an interactive menu for selecting and managing CLI agents.
+
+Requirements:
+  - fzf or peco must be installed
+
+Examples:
+  agent-menu
+
+EOF
+}
+
+# Main
+main() {
+  if [[ "$1" == "-h" || "$1" == "--help" || "$1" == "help" ]]; then
+    show_usage
+    exit 0
+  fi
+
+  show_menu
+}
+
+main "$@"

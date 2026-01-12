@@ -1,0 +1,11 @@
+{
+  "name": "test-agent",
+  "display_name": "Test Agent",
+  "command": "echo",
+  "default_args": ["Agent is running... Press Ctrl+C to exit"],
+  "working_dir": null,
+  "env_vars": {},
+  "session_prefix": "agent-",
+  "icon": "🧪",
+  "color": "green"
+}

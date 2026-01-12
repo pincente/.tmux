@@ -1,0 +1,6 @@
+{
+  "name": "1x2",
+  "description": "Two pane vertical layout",
+  "layout": "main-vertical",
+  "panes": 2
+}

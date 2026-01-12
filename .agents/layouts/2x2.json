@@ -1,0 +1,6 @@
+{
+  "name": "2x2",
+  "description": "Four pane grid layout",
+  "layout": "tiled",
+  "panes": 4
+}

@@ -1,0 +1,11 @@
+{
+  "name": "cursor-cli",
+  "display_name": "Cursor",
+  "command": "cursor",
+  "default_args": [],
+  "working_dir": null,
+  "env_vars": {},
+  "session_prefix": "agent-",
+  "icon": "⚡",
+  "color": "blue"
+}

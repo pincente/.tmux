@@ -1,0 +1,310 @@
+#!/bin/bash
+# Agent Workflow Execution
+# Execute and manage agent workflows
+
+set -e
+
+# Get the base directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMUX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Workflow directory
+WORKFLOWS_DIR="${TMUX_DIR}/.agents/workflows"
+
+# Source libraries
+source "${TMUX_DIR}/lib/agent-utils.sh"
+source "${TMUX_DIR}/lib/tmux-helpers.sh"
+
+# Show usage
+show_usage() {
+  cat << EOF
+Agent Workflow Execution
+
+Usage: agent-workflow <command> [options]
+
+Commands:
+  run <workflow-name> [--param value ...]  Execute a workflow
+  list                                      List available workflows
+  create <name>                             Create a new workflow interactively
+  validate <workflow-name>                  Validate workflow syntax
+
+Options:
+  -h, --help                     Show this help message
+
+Examples:
+  agent-workflow run code-review --input src/
+  agent-workflow list
+  agent-workflow create my-workflow
+
+EOF
+}
+
+# List available workflows
+list_workflows() {
+  if [[ ! -d "$WORKFLOWS_DIR" ]]; then
+    echo "No workflows directory found"
+    return 0
+  fi
+
+  local workflows=("$WORKFLOWS_DIR"/*.yml)
+
+  if [[ ${#workflows[@]} -eq 0 || ! -f "${workflows[0]}" ]]; then
+    echo "No workflows found"
+    return 0
+  fi
+
+  printf "%-30s %-50s\n" "Workflow" "Description"
+  printf "%-30s %-50s\n" "--------" "-----------"
+
+  for workflow_file in "${workflows[@]}"; do
+    if [[ -f "$workflow_file" ]]; then
+      local name
+      name=$(basename "$workflow_file" .yml)
+      local description
+      description=$(grep -m1 "^description:" "$workflow_file" | cut -d: -f2- | sed 's/^[[:space:]]*//')
+
+      printf "%-30s %-50s\n" "$name" "${description:-No description}"
+    fi
+  done
+}
+
+# Validate a workflow
+validate_workflow() {
+  local workflow_name=$1
+  local workflow_file="$WORKFLOWS_DIR/${workflow_name}.yml"
+
+  if [[ ! -f "$workflow_file" ]]; then
+    echo "✗ Workflow not found: $workflow_name" >&2
+    return 1
+  fi
+
+  echo "Validating workflow: $workflow_name"
+
+  # Check for required fields
+  if ! grep -q "^name:" "$workflow_file"; then
+    echo "✗ Missing required field: name" >&2
+    return 1
+  fi
+
+  if ! grep -q "^steps:" "$workflow_file"; then
+    echo "✗ Missing required field: steps" >&2
+    return 1
+  fi
+
+  # Check that all agents exist
+  local agents
+  agents=$(grep "^\s*agent:" "$workflow_file" | awk '{print $2}')
+
+  for agent in $agents; do
+    if ! validate_agent "$agent" 2>/dev/null; then
+      echo "⚠ Warning: Agent not found or invalid: $agent"
+    fi
+  done
+
+  echo "✓ Workflow is valid"
+  return 0
+}
+
+# Run a workflow
+run_workflow() {
+  local workflow_name=$1
+  shift
+  local params=()
+
+  # Parse parameters
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --*)
+        params+=("$1=$2")
+        shift 2
+        ;;
+      *)
+        echo "Unknown parameter: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  local workflow_file="$WORKFLOWS_DIR/${workflow_name}.yml"
+
+  if [[ ! -f "$workflow_file" ]]; then
+    echo "✗ Workflow not found: $workflow_name" >&2
+    echo "Use 'agent-workflow list' to see available workflows" >&2
+    return 1
+  fi
+
+  # Validate workflow
+  if ! validate_workflow "$workflow_name"; then
+    echo "✗ Workflow validation failed" >&2
+    return 1
+  fi
+
+  echo "Running workflow: $workflow_name"
+  echo ""
+
+  # Parse workflow steps
+  local step_num=0
+  local in_steps=false
+
+  while IFS= read -r line; do
+    if [[ $line =~ ^steps: ]]; then
+      in_steps=true
+      continue
+    fi
+
+    if [[ $in_steps == true ]]; then
+      if [[ $line =~ ^-\s*agent:\s*([^\s]+) ]]; then
+        local agent="${BASH_REMATCH[1]}"
+        step_num=$((step_num + 1))
+
+        echo "Step $step_num: Running agent: $agent"
+
+        # Replace variables in input
+        local input=""
+        if [[ $line =~ input:\s*\"([^\"]+)\" ]]; then
+          input="${BASH_REMATCH[1]}"
+          # Replace workflow parameters
+          for param in "${params[@]}"; do
+            local param_name="${param%%=*}"
+            local param_value="${param#*=}"
+            local var_name="${param_name#--}"
+            input="${input//\$${var_name}/$param_value}"
+          done
+          echo "  Input: $input"
+        fi
+
+        # Start the agent
+        if ! is_agent_session_running "$agent"; then
+          if start_agent "$agent" 2>/dev/null; then
+            echo "  ✓ Agent started"
+          else
+            echo "  ✗ Failed to start agent" >&2
+            return 1
+          fi
+        else
+          echo "  ℹ Agent already running"
+        fi
+
+        # Wait a moment for agent to initialize
+        sleep 2
+      fi
+    fi
+  done < "$workflow_file"
+
+  echo ""
+  echo "✓ Workflow completed: $workflow_name"
+}
+
+# Create a new workflow
+create_workflow() {
+  local workflow_name=$1
+
+  local workflow_file="$WORKFLOWS_DIR/${workflow_name}.yml"
+
+  if [[ -f "$workflow_file" ]]; then
+    echo "Workflow already exists: $workflow_name" >&2
+    echo "Edit: $workflow_file" >&2
+    return 1
+  fi
+
+  echo "Creating workflow: $workflow_name"
+
+  # Get workflow description
+  read -p "Description: " description
+
+  cat > "$workflow_file" << EOF
+name: $workflow_name
+description: $description
+steps:
+  - agent: <agent-name>
+    name: <step-name>
+    input: "\${INPUT}"
+EOF
+
+  echo "✓ Workflow created: $workflow_file"
+  echo "Edit the file to add steps, then use 'agent-workflow run $workflow_name' to execute"
+}
+
+# Helper function to start an agent (copied from agent-session)
+start_agent() {
+  local agent_name=$1
+
+  if ! validate_agent "$agent_name"; then
+    return 1
+  fi
+
+  local session_name
+  session_name=$(get_agent_session_name "$agent_name")
+
+  if is_agent_session_running "$agent_name"; then
+    return 0
+  fi
+
+  local command
+  local default_args
+  local working_dir
+  command=$(get_agent_command "$agent_name")
+  default_args=$(get_agent_default_args "$agent_name")
+  working_dir=$(get_agent_working_dir "$agent_name")
+
+  local full_command="$command $default_args"
+  local create_args=()
+
+  if [[ -n "$working_dir" ]]; then
+    create_args=("-c" "$working_dir")
+  fi
+
+  tmux new-session -d -s "$session_name" -n "$agent_name" $create_args "$full_command"
+}
+
+# Main
+main() {
+  if [[ $# -eq 0 ]]; then
+    show_usage
+    exit 0
+  fi
+
+  local command=$1
+  shift
+
+  case $command in
+    run)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing workflow name" >&2
+        echo "Usage: agent-workflow run <workflow-name> [--param value ...]" >&2
+        exit 1
+      fi
+      run_workflow "$@"
+      ;;
+    list)
+      list_workflows
+      ;;
+    validate)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing workflow name" >&2
+        echo "Usage: agent-workflow validate <workflow-name>" >&2
+        exit 1
+      fi
+      validate_workflow "$1"
+      ;;
+    create)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing workflow name" >&2
+        echo "Usage: agent-workflow create <name>" >&2
+        exit 1
+      fi
+      create_workflow "$1"
+      ;;
+    -h|--help|help)
+      show_usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown command: $command" >&2
+      echo "Use 'agent-workflow --help' for usage information" >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

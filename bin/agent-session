@@ -1,0 +1,247 @@
+#!/bin/bash
+# Agent Session Management
+# Create, start, stop, and manage individual agent sessions
+
+set -e
+
+# Get the base directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMUX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source libraries
+source "${TMUX_DIR}/lib/agent-utils.sh"
+source "${TMUX_DIR}/lib/tmux-helpers.sh"
+
+# Show usage
+show_usage() {
+  cat << EOF
+Agent Session Management
+
+Usage: agent-session <command> [options]
+
+Commands:
+  start <agent-name> [--args "..."]  Start a new agent session
+  stop <agent-name>                 Stop an agent session
+  list                               List all agent sessions
+  switch <agent-name>                Switch to an agent session
+  status <agent-name>                Get status of an agent
+
+Options:
+  --args "..."                       Additional arguments for agent command
+  -h, --help                         Show this help message
+
+Examples:
+  agent-session start aider
+  agent-session start gpt-cli --args "--model gpt-4-turbo"
+  agent-session list
+  agent-session switch aider
+  agent-session stop aider
+
+EOF
+}
+
+# Start an agent session
+start_agent() {
+  local agent_name=$1
+  shift
+  local extra_args=()
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --args)
+        shift
+        extra_args=($1)
+        ;;
+      *)
+        echo "Unknown option: $1" >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
+  # Validate agent
+  if ! validate_agent "$agent_name"; then
+    exit 1
+  fi
+
+  # Check if session already exists
+  local session_name
+  session_name=$(get_agent_session_name "$agent_name")
+
+  if is_agent_session_running "$agent_name"; then
+    echo "Agent session already running: $session_name"
+    echo "Use 'agent-session switch $agent_name' to switch to it"
+    return 0
+  fi
+
+  # Get agent configuration
+  local command
+  local default_args
+  local working_dir
+  command=$(get_agent_command "$agent_name")
+  default_args=$(get_agent_default_args "$agent_name")
+  working_dir=$(get_agent_working_dir "$agent_name")
+
+  # Build full command
+  local full_args=(${default_args} ${extra_args[@]})
+  local full_command="$command ${full_args[*]}"
+
+  # Create session
+  local create_args=()
+  if [[ -n "$working_dir" ]]; then
+    create_args=("-c" "$working_dir")
+  fi
+
+  if tmux new-session -d -s "$session_name" -n "$agent_name" $create_args $full_command; then
+    echo "✓ Agent session started: $session_name"
+    echo "  Command: $full_command"
+    echo "  Use 'agent-session switch $agent_name' to attach"
+  else
+    echo "✗ Failed to start agent session" >&2
+    exit 1
+  fi
+}
+
+# Stop an agent session
+stop_agent() {
+  local agent_name=$1
+
+  if ! is_agent_session_running "$agent_name"; then
+    echo "Agent session not running: $agent_name"
+    return 0
+  fi
+
+  local session_name
+  session_name=$(get_agent_session_name "$agent_name")
+
+  if tmux_kill_session "$session_name"; then
+    echo "✓ Agent session stopped: $session_name"
+  else
+    echo "✗ Failed to stop agent session" >&2
+    exit 1
+  fi
+}
+
+# List all agent sessions
+list_agents() {
+  local sessions
+  sessions=$(tmux_list_agent_sessions 2>/dev/null)
+
+  if [[ -z "$sessions" ]]; then
+    echo "No agent sessions running"
+    return 0
+  fi
+
+  printf "%-25s %-20s %-10s\n" "Session" "Agent" "Status"
+  printf "%-25s %-20s %-10s\n" "-------" "-----" "------"
+
+  while IFS='|' read -r session_name agent_display status; do
+    printf "%-25s %-20s %-10s\n" "$session_name" "$agent_display" "$status"
+  done <<< "$sessions"
+}
+
+# Switch to an agent session
+switch_agent() {
+  local agent_name=$1
+
+  if ! is_agent_session_running "$agent_name"; then
+    echo "Agent session not running: $agent_name"
+    echo "Use 'agent-session start $agent_name' to start it"
+    return 1
+  fi
+
+  local session_name
+  session_name=$(get_agent_session_name "$agent_name")
+
+  if tmux_switch_session "$session_name"; then
+    echo "✓ Switched to agent session: $session_name"
+  else
+    echo "✗ Failed to switch to agent session" >&2
+    exit 1
+  fi
+}
+
+# Get status of an agent
+agent_status() {
+  local agent_name=$1
+
+  if ! validate_agent "$agent_name"; then
+    exit 1
+  fi
+
+  local status
+  status=$(tmux_agent_status "$agent_name" 2>/dev/null || echo "stopped")
+
+  local session_name
+  session_name=$(get_agent_session_name "$agent_name")
+
+  echo "Agent: $agent_name"
+  echo "Session: $session_name"
+  echo "Status: $status"
+
+  if [[ "$status" == "running" || "$status" == "active" ]]; then
+    echo "Command: $(get_agent_command "$agent_name")"
+  fi
+}
+
+# Main
+main() {
+  if [[ $# -eq 0 ]]; then
+    show_usage
+    exit 0
+  fi
+
+  local command=$1
+  shift
+
+  case $command in
+    start)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing agent name" >&2
+        echo "Usage: agent-session start <agent-name> [--args \"...\"]" >&2
+        exit 1
+      fi
+      start_agent "$@"
+      ;;
+    stop)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing agent name" >&2
+        echo "Usage: agent-session stop <agent-name>" >&2
+        exit 1
+      fi
+      stop_agent "$1"
+      ;;
+    list)
+      list_agents
+      ;;
+    switch)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing agent name" >&2
+        echo "Usage: agent-session switch <agent-name>" >&2
+        exit 1
+      fi
+      switch_agent "$1"
+      ;;
+    status)
+      if [[ $# -lt 1 ]]; then
+        echo "Error: Missing agent name" >&2
+        echo "Usage: agent-session status <agent-name>" >&2
+        exit 1
+      fi
+      agent_status "$1"
+      ;;
+    -h|--help|help)
+      show_usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown command: $command" >&2
+      echo "Use 'agent-session --help' for usage information" >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

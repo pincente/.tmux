@@ -1,0 +1,11 @@
+{
+  "name": "anthropic-cli",
+  "display_name": "Claude",
+  "command": "anthropic",
+  "default_args": [],
+  "working_dir": null,
+  "env_vars": {},
+  "session_prefix": "agent-",
+  "icon": "🎭",
+  "color": "orange"
+}

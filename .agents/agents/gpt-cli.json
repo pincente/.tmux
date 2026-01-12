@@ -1,0 +1,11 @@
+{
+  "name": "gpt-cli",
+  "display_name": "GPT",
+  "command": "gpt",
+  "default_args": [],
+  "working_dir": null,
+  "env_vars": {},
+  "session_prefix": "agent-",
+  "icon": "🧠",
+  "color": "purple"
+}

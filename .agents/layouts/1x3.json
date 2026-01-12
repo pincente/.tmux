@@ -1,0 +1,6 @@
+{
+  "name": "1x3",
+  "description": "Three pane horizontal layout",
+  "layout": "main-horizontal",
+  "panes": 3
+}

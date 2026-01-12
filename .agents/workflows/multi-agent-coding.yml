@@ -1,0 +1,12 @@
+name: multi-agent-coding
+description: Use multiple agents in parallel for coding tasks
+steps:
+  - agent: aider
+    name: coding
+    input: "${INPUT_FILE}"
+  - agent: cursor-cli
+    name: review
+    input: "${INPUT_FILE}"
+  - agent: gpt-cli
+    name: documentation
+    input: "${INPUT_FILE}"
